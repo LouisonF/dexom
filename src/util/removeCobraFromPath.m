@@ -2,7 +2,7 @@ function removed = removeCobraFromPath(initScriptName, verbose)
     if ~exist('verbose','var') || isempty(verbose)
         verbose = 0;
     end
-    folders = strsplit(path, ';');
+    folders = strsplit(path, ':');
     root = fileparts(which(initScriptName));
     removed = [];
     if ~isempty(root)
@@ -17,4 +17,3 @@ function removed = removeCobraFromPath(initScriptName, verbose)
         end
     end
 end
-
