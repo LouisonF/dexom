@@ -3,40 +3,48 @@ function ctx = sequentialNetworkEnumeration(model, options)
     lastTimeUpdate = startTime;
     ctx = initializeContext(model);
     ctx.options = options;
-    
+
     % Run the default problem
     ctx.defSol = doReconstruction(model, ctx);
-    if ctx.defSol.isValid == 0
-        error('Cannot find an initial solution');
+    %TODO : Add an update of the lower biomass constraint when a lot of solutions
+    %exist and CPLEX is struggling to find an optimal one
+    while ctx.defSol.isValid == 0
+        %error('Cannot find an initial solution');
+        warning(['Cannot find an initial solution, try again with a greater relMipGapTol value ']);
+        ctx.options.method.solver.relMipGapTol = ctx.options.method.solver.relMipGapTol*10;
+        if ctx.options.method.solver.relMipGapTol >= 0.1
+          error('Cannot find an initial solution, even with a relMipGapTol greater than 0.1');
+        end
+        ctx.defSol = doReconstruction(model, ctx);
     end
     ctx.elapsedTime(ctx.iter) = toc(startTime);
     ctx = registerSolution(ctx.defSol, ctx);
     ctx.medoid = ctx.defSol.internal.solverOutput.int';
     printStatus(ctx);
-    
+
     distances = 0;
     uniqueSolutions = ctx.defSol.activity;
-    
+
     if size(uniqueSolutions, 1) ~= 1
         error('Expected row-vector solution');
     end
-    
+
     while 1
         % Calculate proportion of time covered and proportion of iterations
         % covered and return the maximum
         ctx.iter = ctx.iter + 1;
-        
+
         % Compute progress by taking into account all exit conditions
         pSols = ctx.metrics.numUniqueSolutions(end) / (options.enum.maxUniqueSolutions + 1);
         pIters = ctx.iter / (options.enum.maxIterations+1);
         pTime = min(ctx.elapsedTime(end), options.enum.maxEnumTime) / options.enum.maxEnumTime;
         ctx.progress = min(1, max(pSols, max(pIters, pTime)));
         printStatus(ctx);
-        
+
         if checkExitConditions(ctx)
             break;
         end
-        
+
         % Modify model based on the strategy. For each reaction in rxnIds,
         % there is a corresponding constraint which indicates the
         % constraint to apply to the given reaction (1 = block, 2 = force
@@ -53,11 +61,11 @@ function ctx = sequentialNetworkEnumeration(model, options)
 				break;
             end
         end
-        
+
         % Update the optimal activity
         ctx.status = updateRxnStatusByConstraint(ctx.status, ctx.rxnIds, ...
             ctx.constraints);
-        
+
         % Apply the constraints to the model and generate a new model that
         % will be used as the base model for reconstruction
         if options.method.useDefaultIterativeModelConstraintUpdate == 1
@@ -68,12 +76,12 @@ function ctx = sequentialNetworkEnumeration(model, options)
             % of regenerating the entire model to modify only a few things)
             m = model;
         end
-        
+
         % Re-run method on the new model with the new constraints
         sol = doReconstruction(m, ctx);
         ctx.elapsedTime(ctx.iter) = toc(startTime);
-        ctx = registerSolution(sol, ctx); 
-        
+        ctx = registerSolution(sol, ctx);
+
         % Count the consecutive number of invalid solutions
         if ctx.accepted(end) == 0
             ctx.consecutiveRejections = ctx.consecutiveRejections + 1;
@@ -81,7 +89,7 @@ function ctx = sequentialNetworkEnumeration(model, options)
         else
             ctx.consecutiveRejections = 0;
         end
-        
+
         if options.enum.metricsUpdateFrequency >= 0 && ...
                 toc(lastTimeUpdate) > options.enum.metricsUpdateFrequency
             lastTimeUpdate = tic();
@@ -93,7 +101,7 @@ function ctx = sequentialNetworkEnumeration(model, options)
             distances = calculateDistance(uniqueSolutions, options.enum.metricsDistance);
             ctx.metrics.lastUpdate = ctx.iter;
         end
-        
+
         % Move to method update metrics?
         % Store only summary information
         % REMOVE METRICS FROM THE CONTEXT
@@ -114,7 +122,7 @@ function ctx = sequentialNetworkEnumeration(model, options)
         Z(Z==0) = Inf;
         ctx.metrics.distance.avgNearest(end+1) = mean(min(Z,[],2));
     end
-    
+
 end
 
 function printLn(line, verbose)
@@ -123,7 +131,7 @@ function printLn(line, verbose)
 end
 
 function printStatus(ctx)
-    if ctx.options.enum.verbose <= 0, return; end  
+    if ctx.options.enum.verbose <= 0, return; end
     nRxn = sum(ctx.lastSol.boolRxnSolution);
     progress = ctx.progress * 100;
     propRH = ctx.lastSol.proportionRH * 100;
@@ -170,7 +178,7 @@ function ctx = registerSolution(sol, ctx)
     obj = sol.internal.solverOutput.obj;
     if isempty(obj)
         obj = nan;
-    end    
+    end
     ctx.objectives(ctx.iter) = obj;
     ctx.scores(ctx.iter,:) = sol.normalizedScore;
     ctx.isValid(ctx.iter) = sol.isValid;
@@ -182,7 +190,7 @@ function ctx = registerSolution(sol, ctx)
     if accept
         if ctx.options.enum.enumGreedySkipReactions == 1
             ctx.skipRxn = updateRxnStatus(sol.activity, ctx.skipRxn);
-        end    
+        end
     end
 end
 
@@ -259,7 +267,7 @@ function [rxnId, test] = defaultSelection(model, ctx, block, forward, backward)
     else
         bckw = inf;
     end
-        
+
     rxnId = min(blck, min(fwd, bckw));
     if rxnId == blck
         test = 1;
@@ -269,8 +277,8 @@ function [rxnId, test] = defaultSelection(model, ctx, block, forward, backward)
         test = 3;
     else
         error('Invalid option');
-    end 
-    
+    end
+
     if isempty(rxnId) || rxnId > length(model.rxns)
         rxnId = 0;
         test = 0;
@@ -279,23 +287,23 @@ end
 
 
 function [rxnId, test] = randomSelection(model, ctx, block, forward, backward)
-    available = getCandidateReactions(model, ctx);        
+    available = getCandidateReactions(model, ctx);
     test = [];
     rxnId = 0;
-    
+
     if sum(available(1,:)) > 1 && block, test = [test 1]; end
     if sum(available(2,:)) > 1 && forward, test = [test 2]; end
     if sum(available(3,:)) > 1 && backward, test = [test 3]; end
-    
+
     if length(test) > 1
         test = randsample(test, 1);
     end
-    
+
     rxnId = find(available(test,:));
     if length(rxnId) > 1
         rxnId = randsample(rxnId, 1);
     end
-    
+
 end
 
 function m = applyNewConstraints(model, rxnIds, constraints, tol)
